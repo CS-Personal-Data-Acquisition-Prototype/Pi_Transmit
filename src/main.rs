@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         FROM sensor_data")?;
 
     // 3. Connect to the remote server (change IP & port as needed)
-    let mut stream = TcpStream::connect("192.168.68.51:9000")?;
+    let mut stream = TcpStream::connect("0.0.0.0:9000")?;
     println!("Connected to remote server.");
 
     // 4. Send records as CSV lines
