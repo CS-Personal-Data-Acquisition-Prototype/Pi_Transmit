@@ -5,6 +5,7 @@ use std::io::{Error as IoError, ErrorKind, Write};
 use std::net::TcpStream;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::Path;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
@@ -30,7 +31,30 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Connecting to {}:{}", server_ip, server_port);
     
     // Open the local SQLite database
-    let conn = Connection::open("../Pi_TCP/src/data_acquisition.db")?;
+    // Database configuration - add to config.ini
+    let db_path = config.get("database", "path")
+        .unwrap_or("../Pi_TCP/src/data_acquisition.db".to_string());
+    
+    println!("Attempting to open database at: {}", &db_path);
+    
+    // Check if file exists before attempting to open
+    if !Path::new(&db_path).exists() {
+        println!("Database file not found at: {}", &db_path);
+        println!("Current working directory: {:?}", std::env::current_dir()?);
+        return Err(Box::new(IoError::new(
+            ErrorKind::NotFound,
+            format!("Database file not found at: {}", db_path)
+        )));
+    }
+    
+    // Open the local SQLite database
+    let conn = match Connection::open(&db_path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            println!("Failed to open database: {}", e);
+            return Err(Box::new(e));
+        }
+    };
     
     // Track the last processed row ID
     let mut last_id = get_last_processed_id(&conn)?;
