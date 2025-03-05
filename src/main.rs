@@ -33,7 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Open the local SQLite database
     // Database configuration - add to config.ini
     let db_path = config.get("database", "path")
-        .unwrap_or("../Pi_TCP/src/data_acquisition.db".to_string());
+        .unwrap_or("../src/data_acquisition.db".to_string());
     
     println!("Attempting to open database at: {}", &db_path);
     
