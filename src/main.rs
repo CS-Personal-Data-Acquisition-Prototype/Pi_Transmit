@@ -202,5 +202,5 @@ fn get_last_processed_id(conn: &Connection) -> Result<i64, Box<dyn Error>> {
     )?;
     
     // Start from 0 to include all rows in first transmission
-    Ok(0)
+    Ok(result)
 }
