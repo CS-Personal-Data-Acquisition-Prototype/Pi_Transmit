@@ -30,7 +30,7 @@ The `config.ini` file contains essential settings for the application. Place thi
 
 ```ini
 [server]
-ip = 192.168.68.51        ; IP address of the remote server
+ip = 0.0.0.0        ; IP address of the remote server
 port = 9000               ; Port number for the connection
 max_retries = 3           ; Number of retry attempts on connection failure
 retry_delay = 2           ; Delay (in seconds) between retry attempts
@@ -48,7 +48,7 @@ buffer_size = 4096        ; Buffer size for data transmission
 batch_size = 100          ; Number of records to transmit in one batch
 
 [database]
-path = /home/brad/Pi_TCP/src/data_acquisition.db  ; Path to the SQLite database file
+path = /home/pi/Pi_TCP/src/data_acquisition.db  ; Path to the SQLite database file
 ```
 
 ## Usage
