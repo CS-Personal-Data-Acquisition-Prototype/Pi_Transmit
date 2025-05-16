@@ -1,14 +1,14 @@
 use configparser::ini::Ini;
 use rusqlite::{params, Connection};
 use std::error::Error;
-use std::io::{Error as IoError, ErrorKind};
+use std::io::{Error as IoError, ErrorKind, Write};
+use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::path::Path;
 use serde::Serialize;
-use reqwest::blocking::{Client, Response};
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
+use serde_json;
 
 #[derive(Serialize)]
 struct SensorData {
@@ -27,13 +27,6 @@ struct SensorData {
     dac_2: f64,
     dac_3: f64,
     dac_4: f64,
-}
-
-#[derive(Serialize)]
-struct KeepAliveMessage {
-    message_type: String,
-    client_id: String,
-    timestamp: i64
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -61,11 +54,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let db_path = config.get("database", "path")
         .unwrap_or("../src/data_acquisition.db".to_string());
     
-    // HTTP endpoint configuration
-    let endpoint = format!("http://{}:{}/data", server_ip, server_port);
-    let keep_alive_endpoint = format!("http://{}:{}/keepalive", server_ip, server_port);
+    // Server address for TCP connection
+    let server_address = format!("{}:{}", server_ip, server_port);
     
-    println!("Using API endpoint: {}", endpoint);
+    println!("Connecting to server at: {}", server_address);
     println!("Attempting to open database at: {}", &db_path);
     
     // Check if database file exists
@@ -90,9 +82,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Track the last processed row ID
     let mut last_id = get_last_processed_id(&conn)?;
     
-    // Create HTTP client
-    let client = create_http_client(connection_timeout)?;
-    println!("HTTP client created successfully");
+    // Establish TCP connection
+    let mut stream = match connect_with_retry(&server_address, max_retries, retry_delay) {
+        Ok(stream) => stream,
+        Err(e) => {
+            println!("Failed to establish connection: {}", e);
+            return Err(e);
+        }
+    };
+    println!("TCP connection established successfully");
     
     // Main transmission loop
     while continuous {
@@ -143,9 +141,30 @@ fn main() -> Result<(), Box<dyn Error>> {
         for row_result in rows {
             match row_result {
                 Ok(sensor_data) => {
-                    // Try to send data via HTTP
-                    if let Err(e) = send_data_http(&client, &endpoint, &sensor_data, max_retries, retry_delay) {
+                    // Try to send data via TCP
+                    if let Err(e) = send_data(&mut stream, &sensor_data) {
                         println!("Error sending data: {}", e);
+                        
+                        // Try to reconnect if configured to do so
+                        if auto_reconnect {
+                            println!("Attempting to reconnect...");
+                            match connect_with_retry(&server_address, max_retries, retry_delay) {
+                                Ok(new_stream) => {
+                                    stream = new_stream;
+                                    // Retry sending this row
+                                    if let Err(e) = send_data(&mut stream, &sensor_data) {
+                                        println!("Failed to send data after reconnect: {}", e);
+                                    } else {
+                                        rows_count += 1;
+                                    }
+                                },
+                                Err(e) => {
+                                    println!("Failed to reconnect: {}", e);
+                                    // Continue to next iteration, will try again after sleep
+                                    break;
+                                }
+                            }
+                        }
                     } else {
                         rows_count += 1;
                     }
@@ -156,78 +175,57 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Send keep-alive if no data was sent
         if rows_count == 0 && keep_alive_interval > 0 {
-            // Create a simple keepalive message
-            let keep_alive = KeepAliveMessage {
-                message_type: "keepalive".to_string(),
-                client_id: "pi_transmit".to_string(),
-                timestamp: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64
-            };
-            
-            // Send keepalive via HTTP instead of TCP stream
-            match client.post(&keep_alive_endpoint)
-                .json(&keep_alive)
-                .send() 
-            {
-                Ok(response) => {
-                    if !response.status().is_success() {
-                        println!("Keepalive response error: {}", response.status());
+            if let Err(e) = stream.write_all(b"KEEPALIVE\n") {
+                println!("Failed to send keep-alive: {}", e);
+                
+                if auto_reconnect {
+                    match connect_with_retry(&server_address, max_retries, retry_delay) {
+                        Ok(new_stream) => stream = new_stream,
+                        Err(e) => println!("Failed to reconnect: {}", e),
                     }
-                },
-                Err(e) => println!("Failed to send keep-alive: {}", e)
+                }
             }
-        }  
+        }
             
         // Sleep for the specified interval before checking again
         thread::sleep(Duration::from_secs_f64(transmit_interval));
-            } // <- Missing closing brace for while loop
+    }
         
-   Ok(())
-}
-fn create_http_client(timeout_seconds: u64) -> Result<Client, Box<dyn Error>> {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    
-    let client = Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds))
-        .default_headers(headers)
-        .build()?;
-        
-    Ok(client)
+    Ok(())
 }
 
-fn send_data_http(client: &Client, endpoint: &str, data: &SensorData, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
+fn connect_with_retry(address: &str, max_retries: u32, retry_delay: u64) -> Result<TcpStream, Box<dyn Error>> {
     let mut attempts = 0;
     
-    while attempts < max_retries {
-        match client.post(endpoint)
-            .json(data)
-            .send()
-        {
-            Ok(response) => {
-                if response.status().is_success() {
-                    return Ok(());
-                } else {
-                    println!("Server returned error: {} - {}", response.status(), response.text().unwrap_or_default());
-                }
+    loop {
+        match TcpStream::connect(address) {
+            Ok(stream) => {
+                println!("Connected to server at {}", address);
+                return Ok(stream);
             },
             Err(e) => {
-                println!("HTTP request error (attempt {}): {}", attempts + 1, e);
+                attempts += 1;
+                if attempts >= max_retries {
+                    return Err(Box::new(e));
+                }
+                println!("Connection attempt {} failed: {}. Retrying in {} seconds...", 
+                         attempts, e, retry_delay);
+                thread::sleep(Duration::from_secs(retry_delay));
             }
         }
-        
-        attempts += 1;
-        if attempts < max_retries {
-            thread::sleep(Duration::from_secs(retry_delay));
-        }
     }
+}
+
+fn send_data(stream: &mut TcpStream, data: &SensorData) -> Result<(), Box<dyn Error>> {
+    // Serialize the data to JSON
+    let json = serde_json::to_string(data)?;
     
-    Err(Box::new(IoError::new(
-        ErrorKind::ConnectionRefused,
-        format!("Failed to send data after {} attempts", max_retries)
-    )))
+    // Send the data followed by a newline
+    stream.write_all(json.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    
+    Ok(())
 }
 
 fn get_last_processed_id(conn: &Connection) -> Result<i64, Box<dyn Error>> {
