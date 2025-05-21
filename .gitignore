@@ -3,6 +3,7 @@ server_config.txt
 # Ignore configuration files
 config.ini
 config.rs
+last_processed_id.txt
 
 # Ignore database files
 *.db
@@ -30,6 +31,9 @@ Cargo.lock
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Diagnostic files
+last_processed_id.txt
 
 # VS code files
 .vscode/
