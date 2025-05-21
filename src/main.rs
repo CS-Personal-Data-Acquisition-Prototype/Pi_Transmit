@@ -6,7 +6,7 @@ use std::net::TcpStream;
 use std::thread;
 use std::time::Duration;
 // use std::time::{SystemTime, UNIX_EPOCH};
-use std::path::Path;
+// use std::path::Path;
 use serde::Serialize;
 use serde_json;
 use std::net::Shutdown;
@@ -31,11 +31,13 @@ struct SensorData {
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct BatchedSensorData {
     datapoints: Vec<DataPoint>,
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 struct DataPoint {
     id: String,
     datetime: String,
@@ -176,7 +178,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             // Choose processing mode based on config
             if send_mode == "individual" {
                 println!("Using individual processing mode");
-                let mut last_processed_id = last_id;
+                let mut _last_processed_id = last_id;
                 // Process each item individually
                 for row_result in rows {
                     match row_result {
@@ -189,7 +191,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                     if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
                                         println!("Warning: Failed to save last processed ID: {}", e);
                                     }
-                                    last_processed_id = row_id;
+                                    _last_processed_id = row_id;
                                 },
                                 Err(e) => {
                                     // Connection failed, don't update last_id
@@ -283,6 +285,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 
+#[allow(dead_code)]
 fn connect_with_retry(address: &str, max_retries: u32, retry_delay: u64) -> Result<TcpStream, Box<dyn Error>> {
     let mut attempts = 0;
     
@@ -307,7 +310,7 @@ fn connect_with_retry(address: &str, max_retries: u32, retry_delay: u64) -> Resu
 
 
 fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
-    let mut attempts = 0;
+    // let mut attempts = 0;
     
     // Convert SensorData to the format the server expects, ensuring data_blob is a STRING
 let datapoints: Vec<serde_json::Value> = batch.iter().map(|sensor_data| {
@@ -352,7 +355,6 @@ let datapoints: Vec<serde_json::Value> = batch.iter().map(|sensor_data| {
 
     // Use this JSON directly instead of serializing batched_data
     let json = final_json;
-    let endpoint = "/sessions-sensors-data/batch";
    
     while attempts < max_retries {
         match TcpStream::connect(server_address) {
@@ -578,197 +580,201 @@ fn process_single_item(server_address: &str, sensor_data: &SensorData, max_retri
 }
 
 
-fn send_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
-    // Create a new connection
-    match connect_with_retry(server_address, max_retries, retry_delay) {
-        Ok(mut stream) => {
-            // Convert SensorData to the format the server expects - with properly formatted data_blob
-            let datapoints: Vec<DataPoint> = batch.iter().map(|sensor_data| {
-                // Create a simple JSON object with needed fields
-                let data_obj = serde_json::json!({
-                    "lat": sensor_data.latitude,
-                    "lon": sensor_data.longitude,
-                    "alt": sensor_data.altitude,
-                    "accel_x": sensor_data.accel_x,
-                    "accel_y": sensor_data.accel_y,
-                    "accel_z": sensor_data.accel_z,
-                    "gyro_x": sensor_data.gyro_x,
-                    "gyro_y": sensor_data.gyro_y,
-                    "gyro_z": sensor_data.gyro_z,
-                    "dac_1": sensor_data.dac_1,
-                    "dac_2": sensor_data.dac_2,
-                    "dac_3": sensor_data.dac_3,
-                    "dac_4": sensor_data.dac_4
-                });
+// #[allow(dead_code)]
+// fn send_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
+//     // Create a new connection
+//     match connect_with_retry(server_address, max_retries, retry_delay) {
+//         Ok(mut stream) => {
+//             // Convert SensorData to the format the server expects - with properly formatted data_blob
+//             let datapoints: Vec<DataPoint> = batch.iter().map(|sensor_data| {
+//                 // Create a simple JSON object with needed fields
+//                 let data_obj = serde_json::json!({
+//                     "lat": sensor_data.latitude,
+//                     "lon": sensor_data.longitude,
+//                     "alt": sensor_data.altitude,
+//                     "accel_x": sensor_data.accel_x,
+//                     "accel_y": sensor_data.accel_y,
+//                     "accel_z": sensor_data.accel_z,
+//                     "gyro_x": sensor_data.gyro_x,
+//                     "gyro_y": sensor_data.gyro_y,
+//                     "gyro_z": sensor_data.gyro_z,
+//                     "dac_1": sensor_data.dac_1,
+//                     "dac_2": sensor_data.dac_2,
+//                     "dac_3": sensor_data.dac_3,
+//                     "dac_4": sensor_data.dac_4
+//                 });
                 
-                // Convert to properly escaped JSON string
-                let data_json = data_obj.to_string();
+//                 // Convert to properly escaped JSON string
+//                 let data_json = data_obj.to_string();
                 
-                DataPoint {
-                    id: sensor_data.session_id.map_or("unknown".to_string(), |id| id.to_string()),
-                    datetime: sensor_data.timestamp.clone(),
-                    data_blob: data_json,
-                }
-            }).collect();
+//                 DataPoint {
+//                     id: sensor_data.session_id.map_or("unknown".to_string(), |id| id.to_string()),
+//                     datetime: sensor_data.timestamp.clone(),
+//                     data_blob: data_json,
+//                 }
+//             }).collect();
             
-            // Create batched data structure with proper field name
-            let batched_data = BatchedSensorData {
-                datapoints,
-            };
+//             // Create batched data structure with proper field name
+//             let batched_data = BatchedSensorData {
+//                 datapoints,
+//             };
             
-            // Send the batch
-            println!("Sending batch of {} records", batch.len());
-            if let Err(e) = send_batched_data(&mut stream, &batched_data) {
-                println!("Error sending batch: {}", e);
-                return Err(e);
-            } else {
-                println!("Successfully sent batch of {} records", batch.len());
-            }
+//             // Send the batch
+//             println!("Sending batch of {} records", batch.len());
+//             if let Err(e) = send_batched_data(&mut stream, &batched_data) {
+//                 println!("Error sending batch: {}", e);
+//                 return Err(e);
+//             } else {
+//                 println!("Successfully sent batch of {} records", batch.len());
+//             }
             
-            // Force connection close - but WAIT FOR RESPONSE FIRST
-            println!("Flushing connection and waiting for server response...");
-            stream.flush()?;
+//             // Force connection close - but WAIT FOR RESPONSE FIRST
+//             println!("Flushing connection and waiting for server response...");
+//             stream.flush()?;
             
-            // Read any server response before closing
-            let mut buffer = [0; 1024];
-            let mut response_size = 0;
+//             // Read any server response before closing
+//             let mut buffer = [0; 1024];
+//             let mut response_size = 0;
             
-            // Set a timeout but give the server some time to respond
-            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+//             // Set a timeout but give the server some time to respond
+//             stream.set_read_timeout(Some(Duration::from_secs(2)))?;
             
-            match stream.read(&mut buffer) {
-                Ok(n) if n > 0 => {
-                    response_size = n;
-                    println!("Received {} bytes from server before closing", n);
-                    println!("Response: {}", String::from_utf8_lossy(&buffer[0..n]));
-                },
-                Ok(_) => println!("Server closed connection without response"),
-                Err(e) => {
-                    if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut {
-                        println!("No response from server within timeout period");
-                    } else {
-                        println!("Error reading response: {}", e);
-                    }
-                }
-            }
+//             match stream.read(&mut buffer) {
+//                 Ok(n) if n > 0 => {
+//                     response_size = n;
+//                     println!("Received {} bytes from server before closing", n);
+//                     println!("Response: {}", String::from_utf8_lossy(&buffer[0..n]));
+//                 },
+//                 Ok(_) => println!("Server closed connection without response"),
+//                 Err(e) => {
+//                     if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut {
+//                         println!("No response from server within timeout period");
+//                     } else {
+//                         println!("Error reading response: {}", e);
+//                     }
+//                 }
+//             }
             
-            // Now properly close the connection
-            println!("Shutting down connection...");
-            if let Err(e) = stream.shutdown(Shutdown::Both) {
-                println!("Warning: Error shutting down connection: {}", e);
-            }
+//             // Now properly close the connection
+//             println!("Shutting down connection...");
+//             if let Err(e) = stream.shutdown(Shutdown::Both) {
+//                 println!("Warning: Error shutting down connection: {}", e);
+//             }
             
-            // Allow a short pause for server processing
-            if response_size > 0 {
-                thread::sleep(Duration::from_millis(300));
-            }
-        },
-        Err(e) => {
-            println!("Failed to connect: {}", e);
-            return Err(e);
-        }
-    }
+//             // Allow a short pause for server processing
+//             if response_size > 0 {
+//                 thread::sleep(Duration::from_millis(300));
+//             }
+//         },
+//         Err(e) => {
+//             println!("Failed to connect: {}", e);
+//             return Err(e);
+//         }
+//     }
     
-    Ok(())
-}
-
-fn send_batched_data(stream: &mut TcpStream, data: &BatchedSensorData) -> Result<(), Box<dyn Error>> {
-    // Define the endpoint
-    let endpoint = "/sessions-sensors-data/batch";
-    
-    // Serialize the data to JSON
-    let json = serde_json::to_string(data)?;
-    
-    // Send with proper HTTP headers - ensure Connection: close is included
-    let http_request = format!(
-        "POST {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-        endpoint, 
-        json.len(), 
-        json
-    );
-    
-    // Send data
-    println!("Sending HTTP request ({} bytes)", http_request.len());
-    stream.write_all(http_request.as_bytes())?;
-    stream.flush()?;
-    
-    // Read response
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    let mut response = Vec::new();
-    let mut buffer = [0; 1024];
-    
-    // Read response for a limited time
-    let mut bytes_read = 0;
-    let start_time = std::time::Instant::now();
-    
-    while start_time.elapsed() < Duration::from_secs(5) {
-        match stream.read(&mut buffer) {
-            Ok(0) => {
-                println!("Connection closed by server");
-                break;
-            },
-            Ok(n) => {
-                response.extend_from_slice(&buffer[0..n]);
-                bytes_read += n;
-                println!("Read {} bytes from server", n);
-                
-                // Received an HTTP response, stop reading
-                if bytes_read > 4 && response.windows(4).any(|w| w == b"\r\n\r\n") {
-                    break;
-                }
-            },
-            Err(e) => {
-                if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut {
-                    break;
-                }
-                return Err(Box::new(e));
-            }
-        }
-    }
-    
-    // Log response
-    if bytes_read > 0 {
-        let response_str = String::from_utf8_lossy(&response);
-        println!("Server response: {} bytes - {}", bytes_read, 
-                &response_str[0..std::cmp::min(response_str.len(), 100)]);
-    }
-    
-    Ok(())
-}
+//     Ok(())
+// }
 
 
-fn send_finalize_request(server_address: &str, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
-    // Create a separate connection for the finalize request
-    match connect_with_retry(server_address, max_retries, retry_delay) {
-        Ok(mut stream) => {
-            // Format a simple finalize request
-            let finalize_endpoint = "/finalize";
-            let finalize_payload = "{\"action\":\"process\"}";
-            
-            let finalize_request = format!(
-                "POST {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                finalize_endpoint,
-                finalize_payload.len(),
-                finalize_payload
-            );
-            
-            println!("Sending finalize request to trigger processing...");
-            stream.write_all(finalize_request.as_bytes())?;
-            stream.flush()?;
-            
-            // Close immediately
-            stream.shutdown(Shutdown::Both)?;
-            
-            println!("Finalize request sent");
-        },
-        Err(e) => {
-            println!("Failed to connect for finalize request: {}", e);
-            return Err(e);
-        }
-    }
+// #[allow(dead_code)]
+// fn send_batched_data(stream: &mut TcpStream, data: &BatchedSensorData) -> Result<(), Box<dyn Error>> {
+//     // Define the endpoint
+//     let endpoint = "/sessions-sensors-data/batch";
     
-    Ok(())
-}
+//     // Serialize the data to JSON
+//     let json = serde_json::to_string(data)?;
+    
+//     // Send with proper HTTP headers - ensure Connection: close is included
+//     let http_request = format!(
+//         "POST {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+//         endpoint, 
+//         json.len(), 
+//         json
+//     );
+    
+//     // Send data
+//     println!("Sending HTTP request ({} bytes)", http_request.len());
+//     stream.write_all(http_request.as_bytes())?;
+//     stream.flush()?;
+    
+//     // Read response
+//     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+//     let mut response = Vec::new();
+//     let mut buffer = [0; 1024];
+    
+//     // Read response for a limited time
+//     let mut bytes_read = 0;
+//     let start_time = std::time::Instant::now();
+    
+//     while start_time.elapsed() < Duration::from_secs(5) {
+//         match stream.read(&mut buffer) {
+//             Ok(0) => {
+//                 println!("Connection closed by server");
+//                 break;
+//             },
+//             Ok(n) => {
+//                 response.extend_from_slice(&buffer[0..n]);
+//                 bytes_read += n;
+//                 println!("Read {} bytes from server", n);
+                
+//                 // Received an HTTP response, stop reading
+//                 if bytes_read > 4 && response.windows(4).any(|w| w == b"\r\n\r\n") {
+//                     break;
+//                 }
+//             },
+//             Err(e) => {
+//                 if e.kind() == ErrorKind::WouldBlock || e.kind() == ErrorKind::TimedOut {
+//                     break;
+//                 }
+//                 return Err(Box::new(e));
+//             }
+//         }
+//     }
+    
+//     // Log response
+//     if bytes_read > 0 {
+//         let response_str = String::from_utf8_lossy(&response);
+//         println!("Server response: {} bytes - {}", bytes_read, 
+//                 &response_str[0..std::cmp::min(response_str.len(), 100)]);
+//     }
+    
+//     Ok(())
+// }
+
+
+// #[allow(dead_code)]
+// fn send_finalize_request(server_address: &str, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
+//     // Create a separate connection for the finalize request
+//     match connect_with_retry(server_address, max_retries, retry_delay) {
+//         Ok(mut stream) => {
+//             // Format a simple finalize request
+//             let finalize_endpoint = "/finalize";
+//             let finalize_payload = "{\"action\":\"process\"}";
+            
+//             let finalize_request = format!(
+//                 "POST {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+//                 finalize_endpoint,
+//                 finalize_payload.len(),
+//                 finalize_payload
+//             );
+            
+//             println!("Sending finalize request to trigger processing...");
+//             stream.write_all(finalize_request.as_bytes())?;
+//             stream.flush()?;
+            
+//             // Close immediately
+//             stream.shutdown(Shutdown::Both)?;
+            
+//             println!("Finalize request sent");
+//         },
+//         Err(e) => {
+//             println!("Failed to connect for finalize request: {}", e);
+//             return Err(e);
+//         }
+//     }
+    
+//     Ok(())
+// }
 
 fn get_last_processed_id(conn: &Connection) -> Result<i64, Box<dyn Error>> {
     // Check if stored last ID from previous runs
