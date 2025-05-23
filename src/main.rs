@@ -308,44 +308,49 @@ fn connect_with_retry(address: &str, max_retries: u32, retry_delay: u64) -> Resu
 
 
 fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
-    // let mut attempts = 0;
+    // Build datapoints to match expected format
+    let mut datapoints_json_array = Vec::with_capacity(batch.len());
     
-    // Convert SensorData to the format the server expects, ensuring data_blob is a STRING
-let datapoints: Vec<serde_json::Value> = batch.iter().map(|sensor_data| {
-    // First create the inner data blob as a regular JSON VALUE (not a string)
-    let inner_data = serde_json::json!({
-        "lat": sensor_data.latitude,
-        "lon": sensor_data.longitude,
-        "alt": sensor_data.altitude,
-        "accel_x": sensor_data.accel_x,
-        "accel_y": sensor_data.accel_y,
-        "accel_z": sensor_data.accel_z,
-        "gyro_x": sensor_data.gyro_x,
-        "gyro_y": sensor_data.gyro_y,
-        "gyro_z": sensor_data.gyro_z,
-        "dac_1": sensor_data.dac_1,
-        "dac_2": sensor_data.dac_2,
-        "dac_3": sensor_data.dac_3,
-        "dac_4": sensor_data.dac_4
+    for sensor_data in batch {
+        // Get the session ID as a string
+        let id_str = match sensor_data.session_id {
+            Some(id) => id.to_string(),
+            None => "1".to_string()
+        };
+        
+        // Create a datapoint object with data_blob as a direct JSON object
+        let datapoint = serde_json::json!({
+            "id": 1i64,
+            "datetime": sensor_data.timestamp,
+            "data_blob": {  // Direct JSON object, not a string
+                "accel_x": sensor_data.accel_x,
+                "accel_y": sensor_data.accel_y,
+                "accel_z": sensor_data.accel_z,
+                "lat": sensor_data.latitude,
+                "lon": sensor_data.longitude, 
+                "alt": sensor_data.altitude,
+                "gyro_x": sensor_data.gyro_x,
+                "gyro_y": sensor_data.gyro_y,
+                "gyro_z": sensor_data.gyro_z,
+                "dac_1": sensor_data.dac_1,
+                "dac_2": sensor_data.dac_2,
+                "dac_3": sensor_data.dac_3,
+                "dac_4": sensor_data.dac_4, 
+                "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
+            }
+        });
+        
+        datapoints_json_array.push(datapoint);
+    }
+    
+    // Create the final JSON structure
+    let batch_payload = serde_json::json!({
+        "datapoints": datapoints_json_array
     });
     
-    // Then create the datapoint - NOTE: id is always 1, matching SESSION_SENSOR_ID
-    serde_json::json!({
-        "id": 1,  // Hard-coded to match SERVER_SENSOR_ID
-        "datetime": sensor_data.timestamp.clone(),
-        // Use to_string on the inner data
-        "data_blob": inner_data.to_string()  
-    })
-}).collect();
-    
-    // Create the JSON manually with proper structure
-    let manual_json = serde_json::json!({
-        "datapoints": datapoints
-    });
-    
-    // Print the exact JSON that will be sent
-    let final_json = serde_json::to_string(&manual_json)?;
-    println!("Final JSON beginning: {}", &final_json[0..std::cmp::min(final_json.len(), 100)]);
+    // Serialize to final JSON string
+    let final_json = serde_json::to_string(&batch_payload)?;
+    println!("Final JSON beginning: {}", &final_json[0..std::cmp::min(final_json.len(),100)]);
     
 
     // When sending the JSON:
@@ -394,9 +399,11 @@ let datapoints: Vec<serde_json::Value> = batch.iter().map(|sensor_data| {
                                 
                                 // Check if it's treating the batch as processed despite the error
                                 if response.contains("Invalid request body") {
-                                    println!("WARNING: The server rejected our data format. Updating batch as processed anyway.");
-                                    // You might want to consider returning Err() instead if you want to fail
-                                    return Ok(());
+                                    println!("ERROR: The server rejected our data format.");
+                                    return Err(Box::new(IoError::new(
+                                        ErrorKind::InvalidData,
+                                        format!("Bad request: {}", response.lines().last().unwrap_or("Unknown error"))
+                                    )));
                                 }
                                 
                                 return Err(Box::new(IoError::new(
@@ -476,31 +483,32 @@ let datapoints: Vec<serde_json::Value> = batch.iter().map(|sensor_data| {
 fn process_single_item(server_address: &str, sensor_data: &SensorData, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
     let mut attempts = 0;
     
-    // Create the JSON for a single item - using DIFFERENT format for single items
+    // Create the JSON for a single item - using SAME format as batch
     let datapoint = serde_json::json!({
-        "session_sensorID": sensor_data.session_id.map_or("0".to_string(), |id| id.to_string()),
-        "datetime": sensor_data.timestamp.clone(),
+        "id": 1i64,
+        "datetime": sensor_data.timestamp,
         "data_blob": {  // Direct JSON object, not a string
-            "lat": sensor_data.latitude,
-            "lon": sensor_data.longitude,
-            "alt": sensor_data.altitude,
             "accel_x": sensor_data.accel_x,
             "accel_y": sensor_data.accel_y,
             "accel_z": sensor_data.accel_z,
+            "lat": sensor_data.latitude,
+            "lon": sensor_data.longitude, 
+            "alt": sensor_data.altitude,
             "gyro_x": sensor_data.gyro_x,
             "gyro_y": sensor_data.gyro_y,
             "gyro_z": sensor_data.gyro_z,
             "dac_1": sensor_data.dac_1,
             "dac_2": sensor_data.dac_2,
             "dac_3": sensor_data.dac_3,
-            "dac_4": sensor_data.dac_4
+            "dac_4": sensor_data.dac_4, 
+            "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
         }
     });
     
     // Debug the structure
     println!("Individual data JSON structure: {}", serde_json::to_string_pretty(&datapoint)?);
     
-    // Single endpoint is different from batch endpoint 
+    // Single endpoint
     let single_endpoint = "/sessions-sensors-data";
     let json = serde_json::to_string(&datapoint)?;
     
@@ -588,12 +596,12 @@ fn get_last_processed_id(conn: &Connection) -> Result<i64, Box<dyn Error>> {
         }
     }
     
-    // If no stored ID, get current max ID to only process new data
-    let result: i64 = conn.query_row(
-        "SELECT IFNULL(MAX(rowid), 0) FROM sensor_data",
+    // If no stored ID, get the SECOND row's ID (or 0 if less than 2 rows exist)
+    let second_row_id: i64 = conn.query_row(
+        "SELECT IFNULL((SELECT rowid FROM sensor_data ORDER BY rowid LIMIT 1 OFFSET 1), 0)",
         params![],
         |row| row.get(0),
     )?;
     
-    Ok(result)
+    Ok(second_row_id)
 }
