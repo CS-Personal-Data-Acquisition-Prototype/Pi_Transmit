@@ -30,8 +30,8 @@ The `config.ini` file contains essential settings for the application. Place thi
 
 ```ini
 [server]
-ip = 0.0.0.0        ; IP address of the remote server
-port = 9000               ; Port number for the connection
+ip = 0.0.0.0              ; IP address of the remote server
+port = 7878               ; Port number for the connection
 max_retries = 3           ; Number of retry attempts on connection failure
 retry_delay = 2           ; Delay (in seconds) between retry attempts
 
@@ -43,17 +43,31 @@ auto_reconnect = true     ; Automatically reconnect if connection drops
 
 [transmission]
 continuous = true         ; Whether to transmit data continuously
-transmit_interval = 1.0   ; Time between transmissions in seconds
-buffer_size = 4096        ; Buffer size for data transmission
-batch_size = 100          ; Number of records to transmit in one batch
+transmit_interval = 0.5   ; Time between transmissions in seconds
+buffer_size = 65536       ; Buffer size for data transmission
+batch_size = 10000        ; Number of records to transmit in one batch
+send_mode = batch         ; Transmission options batch or individual
 
 [database]
-path = /home/pi/Pi_TCP/src/data_acquisition.db  ; Path to the SQLite database file
+path = /home/pi/Pi_TCP/src/data_acquisition.db  ; Path to the source SQLite database file
+
+[http]
+data_endpoint = /data
+keepalive_endpoint = /keepalive
 ```
 
 ## Usage
 
 To build and run the application:
+
+For development, from the root directory run:
+
+
+```bash
+cargo build
+cargo run
+```
+For production run, from the root directory run:
 
 ```bash
 cargo build --release

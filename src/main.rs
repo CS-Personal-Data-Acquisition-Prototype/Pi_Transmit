@@ -596,12 +596,12 @@ fn get_last_processed_id(conn: &Connection) -> Result<i64, Box<dyn Error>> {
         }
     }
     
-    // If no stored ID, get current max ID to only process new data
-    let result: i64 = conn.query_row(
-        "SELECT IFNULL(MAX(rowid), 0) FROM sensor_data",
+    // If no stored ID, get the SECOND row's ID (or 0 if less than 2 rows exist)
+    let second_row_id: i64 = conn.query_row(
+        "SELECT IFNULL((SELECT rowid FROM sensor_data ORDER BY rowid LIMIT 1 OFFSET 1), 0)",
         params![],
         |row| row.get(0),
     )?;
     
-    Ok(result)
+    Ok(second_row_id)
 }
