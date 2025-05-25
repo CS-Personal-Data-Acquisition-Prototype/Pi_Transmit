@@ -26,7 +26,7 @@ Pi_Transmit is designed to facilitate the seamless transfer of database informat
 
 ## Configuration
 
-The `config.ini` file contains essential settings for the application. Place this file in the `src` directory with the following sections:
+The `config.ini` file contains essential settings for the application. Place this file in the `root` directory with the following sections:
 
 ```ini
 [server]
