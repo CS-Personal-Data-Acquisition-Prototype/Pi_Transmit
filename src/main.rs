@@ -9,6 +9,9 @@ use serde::Serialize;
 use serde_json;
 use std::net::Shutdown;
 
+mod db_pool;
+use db_pool::{ConnectionPool, PooledConnection};
+
 #[derive(Serialize, Clone)]
 struct SensorData {
     session_id: Option<i32>,
@@ -73,7 +76,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Database configuration
     let db_path = config.get("database", "path")
-    .unwrap_or("./data_acquisition.db".to_string());
+        .unwrap_or("./data_acquisition.db".to_string());
+
+    let pool_size = config.getuint("database", "pool_size")?.unwrap_or(3) as usize;
+    let timeout = config.getuint("database", "timeout")?.unwrap_or(30) as u64 * 1000; // Convert to ms
+    let busy_timeout = config.getuint("database", "busy_timeout")?.unwrap_or(5000) as u64;
     
     // Server address for TCP connection
     let server_address = format!("{}:{}", server_ip, server_port);
@@ -82,24 +89,37 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("Attempting to open database at: {}", &db_path);
     
     // Connect to existing database
-    println!("Opening existing database at: {}", &db_path);
-    let conn = match Connection::open(&db_path) {
-        Ok(conn) => {
-            println!("Database opened successfully");
-            conn
+    println!("Creating database connection pool with size {}", pool_size);
+    let conn_pool = match ConnectionPool::new(&db_path, pool_size, timeout, busy_timeout) {
+        Ok(pool) => {
+            println!("Database connection pool created successfully");
+            pool
         },
         Err(e) => {
-            println!("Failed to open database: {}", e);
+            println!("Failed to create database pool: {}", e);
             return Err(Box::new(e));
         }
     };
     
+    let conn = conn_pool.get()?;
+    let mut last_id = get_last_processed_id(&conn)?;
+
     // Track the last processed row ID
     let mut last_id = get_last_processed_id(&conn)?;
 
     // Main transmission loop
     while continuous {
         // Check if new data added
+
+        let conn = match conn_pool.get() {
+            Ok(conn) => conn,
+            Err(e) => {
+                println!("Error getting connection from pool: {}", e);
+                thread::sleep(Duration::from_secs_f64(transmit_interval));
+                continue;
+            }
+        };
+
         let current_max_id: i64 = conn.query_row(
             "SELECT IFNULL(MAX(rowid), 0) FROM sensor_data",
             params![],
