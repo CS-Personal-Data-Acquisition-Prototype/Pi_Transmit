@@ -417,6 +417,16 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                 println!("ERROR: Server rejected the request format: {}", 
                                         response.lines().last().unwrap_or("Unknown error"));
                                 
+                                // Log the problematic JSON data to a file
+                                let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+                                let log_filename = format!("bad_request_batch_{}.json", timestamp);
+                                
+                                if let Err(e) = std::fs::write(&log_filename, &json) {
+                                    println!("Warning: Failed to save error log: {}", e);
+                                } else {
+                                    println!("Saved problematic JSON data to {}", log_filename);
+                                }
+                                
                                 // Check if it's treating the batch as processed despite the error
                                 if response.contains("Invalid request body") {
                                     println!("ERROR: The server rejected our data format.");
@@ -430,7 +440,7 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                     ErrorKind::InvalidData,
                                     format!("Server returned 400 Bad Request. Check data format")
                                 )));
-}
+                            }
                             
                             // Check if the response contains a 404 Not Found error
                             if response.contains("404 Not Found") {
