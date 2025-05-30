@@ -83,7 +83,7 @@ impl ConnectionPool {
                 }
             }
             
-            // If we've been waiting too long, return an error
+            // If waiting too long, return an error
             if start_time.elapsed() > self.timeout {
                 return Err(SQLiteError::ExecuteReturnedResults);
             }
