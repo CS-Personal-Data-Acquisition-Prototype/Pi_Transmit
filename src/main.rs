@@ -249,34 +249,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         current_batch.clear();
                                     },
                                     Err(e) => {
-                                        // Check if this is a signal to skip the batch
-                                        let error_msg = e.to_string();
-                                        if error_msg.contains("SKIP_BATCH") {
-                                            println!("Skipping problematic batch and continuing with next data set");
-                                            
-                                            // Update last_id to skip this entire batch
-                                            last_id = last_processed_id;
-                                            
-                                            // Save updated ID to avoid reprocessing skipped records
-                                            if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
-                                                println!("Warning: Failed to save last processed ID: {}", e);
-                                            }
-                                            
-                                            // Clear the batch and continue
-                                            current_batch.clear();
-                                            continue;
+                                    // Check if this is a signal to skip the batch
+                                    let error_msg = e.to_string();
+                                    if error_msg.contains("SKIP_BATCH") {
+                                        // Extract the next batch boundary ID if available
+                                        let next_id = if let Some(id_str) = error_msg.split(':').nth(1) {
+                                            id_str.parse::<i64>().unwrap_or(last_id + 1)
+                                        } else {
+                                            // If no specific ID provided, just skip current batch
+                                            last_processed_id
+                                        };
+                                        
+                                        println!("Skipping problematic batch and continuing with next batch boundary at ID: {}", next_id);
+                                        
+                                        // Update last_id to skip to the next batch boundary
+                                        last_id = next_id;
+                                        
+                                        // Save updated ID to avoid reprocessing skipped records
+                                        if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
+                                            println!("Warning: Failed to save last processed ID: {}", e);
                                         }
                                         
-                                        // Connection failed, don't update last_id (regular error handling)
-                                        println!("ERROR: Batch processing failed, will retry data: {}", e);
-                                        
-                                        // Implement backoff delay before retry
-                                        println!("Waiting before retry...");
-                                        thread::sleep(Duration::from_secs(retry_delay));
-                                        
-                                        // Break out of the loop to retry from the beginning
-                                        break;
+                                        // Clear the batch and continue
+                                        current_batch.clear();
+                                        continue;
                                     }
+                                    
+                                    // Connection failed, don't update last_id (regular error handling)
+                                    println!("ERROR: Batch processing failed, will retry data: {}", e);
+                                    
+                                    // Implement backoff delay before retry
+                                    println!("Waiting before retry...");
+                                    thread::sleep(Duration::from_secs(retry_delay));
+                                    
+                                    // Break out of the loop to retry from the beginning
+                                    break;
+                                }
                                 }
                             }
                         },
@@ -435,18 +443,18 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                 println!("ERROR: Server rejected the request format: {}", 
                                         response.lines().last().unwrap_or("Unknown error"));
                                 
-                                // Create a simpler plain text error log instead of JSON
+                                // Create error log entry
                                 let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                                 let error_log_path = "transmission_errors.txt";
                                 
-                                // Identify which record likely caused the problem (using row IDs from batch)
+                                // Log the problematic batch details
                                 let problematic_ids = batch.iter()
                                     .enumerate()
                                     .map(|(i, data)| format!("Record {}: Session {}", i, data.session_id.unwrap_or(0)))
                                     .collect::<Vec<String>>()
                                     .join(", ");
                                 
-                                // Create error log entry
+                                // Error entry with batch information
                                 let error_entry = format!(
                                     "\n[{}] ERROR: 400 Bad Request\n  Error details: {}\n  Batch size: {}\n  Records: {}\n  Sample data: {}\n  JSON preview: {}\n",
                                     timestamp,
@@ -457,7 +465,7 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                     if json.len() > 200 { &json[0..200] } else { &json }
                                 );
                                 
-                                // Append to the error log file
+                                // Write to error log
                                 let mut file = match std::fs::OpenOptions::new()
                                     .create(true)
                                     .append(true)
@@ -481,12 +489,32 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                 // Increment attempts and check if we should skip this batch
                                 attempts += 1;
                                 if attempts >= 3 {  // Skip after 3 attempts
-                                    println!("SKIPPING: Failed to process batch after 3 attempts. Moving to next batch.");
+                                    println!("SKIPPING: Failed to process batch after 3 attempts. Moving to next batch boundary.");
                                     
-                                    // Return a special error type that indicates we should skip this batch
+                                    // Calculate the next batch boundary based on the current last_id and batch_size
+                                    // Find the starting ID of this batch
+                                    let batch_start_id = batch.iter().enumerate()
+                                        .filter_map(|(i, _)| {
+                                            if i == 0 {
+                                                Some(last_id + 1)
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .next()
+                                        .unwrap_or(last_id + 1);
+                                    
+                                    // Calculate the next batch boundary
+                                    let batch_size = batch.len() as i64;
+                                    let next_batch_boundary = ((batch_start_id + batch_size - 1) / batch_size + 1) * batch_size;
+                                    
+                                    println!("Current batch starts at ID: {}, Moving to next batch boundary: {}", 
+                                            batch_start_id, next_batch_boundary);
+                                    
+                                    // Return a special error type that indicates we should skip to the next batch boundary
                                     return Err(Box::new(IoError::new(
                                         ErrorKind::InvalidData,
-                                        "SKIP_BATCH: Server rejected batch after max attempts"
+                                        format!("SKIP_BATCH:{}", next_batch_boundary)
                                     )));
                                 }
                                 
