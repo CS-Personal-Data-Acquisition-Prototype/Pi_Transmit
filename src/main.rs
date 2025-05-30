@@ -441,49 +441,49 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
         };
         
         // Create a datapoint object with data_blob as a direct JSON object
-        // let datapoint = serde_json::json!({
-        //     "id": 1i64,
-        //     "datetime": sensor_data.timestamp,
-        //     "data_blob": {  // Direct JSON object, not a string
-        //         "accel_x": sensor_data.accel_x,
-        //         "accel_y": sensor_data.accel_y,
-        //         "accel_z": sensor_data.accel_z,
-        //         "lat": sensor_data.latitude,
-        //         "lon": sensor_data.longitude, 
-        //         "alt": sensor_data.altitude,
-        //         "gyro_x": sensor_data.gyro_x,
-        //         "gyro_y": sensor_data.gyro_y,
-        //         "gyro_z": sensor_data.gyro_z,
-        //         "dac_1": sensor_data.dac_1,
-        //         "dac_2": sensor_data.dac_2,
-        //         "dac_3": sensor_data.dac_3,
-        //         "dac_4": sensor_data.dac_4, 
-        //         "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
-        //     }
-        // });
-        let data_blob_obj = serde_json::json!({
-            "accel_x": sensor_data.accel_x,
-            "accel_y": sensor_data.accel_y,
-            "accel_z": sensor_data.accel_z,
-            "lat": sensor_data.latitude,
-            "lon": sensor_data.longitude, 
-            "alt": sensor_data.altitude,
-            "gyro_x": sensor_data.gyro_x,
-            "gyro_y": sensor_data.gyro_y,
-            "gyro_z": sensor_data.gyro_z,
-            "dac_1": sensor_data.dac_1,
-            "dac_2": sensor_data.dac_2,
-            "dac_3": sensor_data.dac_3,
-            "dac_4": sensor_data.dac_4, 
-            "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
-        });
-        let data_blob_string = data_blob_obj.to_string();
-
         let datapoint = serde_json::json!({
             "id": 1i64,
             "datetime": sensor_data.timestamp,
-            "data_blob": data_blob_string
+            "data_blob": {  // Direct JSON object, not a string
+                "accel_x": sensor_data.accel_x,
+                "accel_y": sensor_data.accel_y,
+                "accel_z": sensor_data.accel_z,
+                "lat": sensor_data.latitude,
+                "lon": sensor_data.longitude, 
+                "alt": sensor_data.altitude,
+                "gyro_x": sensor_data.gyro_x,
+                "gyro_y": sensor_data.gyro_y,
+                "gyro_z": sensor_data.gyro_z,
+                "dac_1": sensor_data.dac_1,
+                "dac_2": sensor_data.dac_2,
+                "dac_3": sensor_data.dac_3,
+                "dac_4": sensor_data.dac_4, 
+                "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
+            }
         });
+        // let data_blob_obj = serde_json::json!({
+        //     "accel_x": sensor_data.accel_x,
+        //     "accel_y": sensor_data.accel_y,
+        //     "accel_z": sensor_data.accel_z,
+        //     "lat": sensor_data.latitude,
+        //     "lon": sensor_data.longitude, 
+        //     "alt": sensor_data.altitude,
+        //     "gyro_x": sensor_data.gyro_x,
+        //     "gyro_y": sensor_data.gyro_y,
+        //     "gyro_z": sensor_data.gyro_z,
+        //     "dac_1": sensor_data.dac_1,
+        //     "dac_2": sensor_data.dac_2,
+        //     "dac_3": sensor_data.dac_3,
+        //     "dac_4": sensor_data.dac_4, 
+        //     "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
+        // });
+        // let data_blob_string = data_blob_obj.to_string();
+
+        // let datapoint = serde_json::json!({
+        //     "id": 1i64,
+        //     "datetime": sensor_data.timestamp,
+        //     "data_blob": data_blob_string
+        // });
         
         datapoints_json_array.push(datapoint);
     }
