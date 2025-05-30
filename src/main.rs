@@ -236,7 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             // When batch is full, send it
                             if current_batch.len() >= batch_size as usize {
                                 // Try to process the batch, only update last_id if successful
-                                match process_batch(&server_address, &current_batch, max_retries, retry_delay) {
+                                match process_batch(&server_address, &current_batch, max_retries, retry_delay, last_id) {
                                     Ok(_) => {
                                         // Success! Update the last_id and save it
                                         rows_count += current_batch.len();
@@ -294,7 +294,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 
                 // Process any remaining rows in a final batch
                 if !current_batch.is_empty() {
-                    match process_batch(&server_address, &current_batch, max_retries, retry_delay) {
+                    match process_batch(&server_address, &current_batch, max_retries, retry_delay, last_id) {
                         Ok(_) => {
                             // Success! Update the last_id
                             rows_count += current_batch.len();
@@ -353,7 +353,7 @@ fn connect_with_retry(address: &str, max_retries: u32, retry_delay: u64) -> Resu
 }
 
 
-fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
+fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64, last_id: i64) -> Result<(), Box<dyn Error>> {
     // Build datapoints to match expected format
     let mut datapoints_json_array = Vec::with_capacity(batch.len());
     
@@ -493,16 +493,16 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                     
                                     // Calculate the next batch boundary based on the current last_id and batch_size
                                     // Find the starting ID of this batch
-                                    let batch_start_id = batch.iter().enumerate()
-                                        .filter_map(|(i, _)| {
-                                            if i == 0 {
-                                                Some(last_id + 1)
-                                            } else {
-                                                None
-                                            }
-                                        })
-                                        .next()
-                                        .unwrap_or(last_id + 1);
+                                        let batch_start_id = batch.iter().enumerate()
+                                            .filter_map(|(i, _)| {
+                                                if i == 0 {
+                                                    Some(last_id + 1)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .next()
+                                            .unwrap_or(last_id + 1);
                                     
                                     // Calculate the next batch boundary
                                     let batch_size = batch.len() as i64;
