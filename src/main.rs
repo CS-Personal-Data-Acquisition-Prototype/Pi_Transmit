@@ -308,8 +308,33 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         },
                         Err(e) => {
-                            // Connection failed, don't update last_id
-                            println!("ERROR: Final batch processing failed, will retry data: {}", e);
+                            // Check if this is a signal to skip the batch
+                            let error_msg = e.to_string();
+                            if error_msg.contains("SKIP_BATCH") {
+                                // Extract the next batch boundary ID if available
+                                let next_id = if let Some(id_str) = error_msg.split(':').nth(1) {
+                                    id_str.parse::<i64>().unwrap_or(last_id + 1)
+                                } else {
+                                    // If no specific ID provided, just skip current batch
+                                    last_processed_id
+                                };
+                                
+                                println!("Skipping problematic final batch and moving to next batch boundary at ID: {}", next_id);
+                                
+                                // Update last_id to skip to the next batch boundary
+                                last_id = next_id;
+                                
+                                // Save updated ID to avoid reprocessing skipped records
+                                if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
+                                    println!("Warning: Failed to save last processed ID: {}", e);
+                                }
+                                
+                                // Clear the batch and continue with the next iteration
+                                current_batch.clear();
+                            } else {
+                                // Connection failed, don't update last_id
+                                println!("ERROR: Final batch processing failed, will retry data: {}", e);
+                            }
                         }
                     }
                 }
