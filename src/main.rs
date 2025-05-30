@@ -272,7 +272,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         
                                         // Clear the batch and continue
                                         current_batch.clear();
-                                        continue;
+                                        break;
                                     }
                                     
                                     // Connection failed, don't update last_id (regular error handling)
@@ -331,6 +331,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 
                                 // Clear the batch and continue with the next iteration
                                 current_batch.clear();
+
+                                break;
                             } else {
                                 // Connection failed, don't update last_id
                                 println!("ERROR: Final batch processing failed, will retry data: {}", e);
