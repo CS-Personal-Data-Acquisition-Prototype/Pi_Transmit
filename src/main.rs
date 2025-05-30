@@ -249,7 +249,25 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         current_batch.clear();
                                     },
                                     Err(e) => {
-                                        // Connection failed, don't update last_id
+                                        // Check if this is a signal to skip the batch
+                                        let error_msg = e.to_string();
+                                        if error_msg.contains("SKIP_BATCH") {
+                                            println!("Skipping problematic batch and continuing with next data set");
+                                            
+                                            // Update last_id to skip this entire batch
+                                            last_id = last_processed_id;
+                                            
+                                            // Save updated ID to avoid reprocessing skipped records
+                                            if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
+                                                println!("Warning: Failed to save last processed ID: {}", e);
+                                            }
+                                            
+                                            // Clear the batch and continue
+                                            current_batch.clear();
+                                            continue;
+                                        }
+                                        
+                                        // Connection failed, don't update last_id (regular error handling)
                                         println!("ERROR: Batch processing failed, will retry data: {}", e);
                                         
                                         // Implement backoff delay before retry
@@ -458,6 +476,18 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                     println!("Warning: Failed to write to error log: {}", e);
                                 } else {
                                     println!("Error details appended to {}", error_log_path);
+                                }
+                                
+                                // Increment attempts and check if we should skip this batch
+                                attempts += 1;
+                                if attempts >= 3 {  // Skip after 3 attempts
+                                    println!("SKIPPING: Failed to process batch after 3 attempts. Moving to next batch.");
+                                    
+                                    // Return a special error type that indicates we should skip this batch
+                                    return Err(Box::new(IoError::new(
+                                        ErrorKind::InvalidData,
+                                        "SKIP_BATCH: Server rejected batch after max attempts"
+                                    )));
                                 }
                                 
                                 return Err(Box::new(IoError::new(
