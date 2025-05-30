@@ -417,23 +417,47 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                 println!("ERROR: Server rejected the request format: {}", 
                                         response.lines().last().unwrap_or("Unknown error"));
                                 
-                                // Log the problematic JSON data to a file
-                                let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
-                                let log_filename = format!("bad_request_batch_{}.json", timestamp);
+                                // Create a simpler plain text error log instead of JSON
+                                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                                let error_log_path = "transmission_errors.txt";
                                 
-                                if let Err(e) = std::fs::write(&log_filename, &json) {
-                                    println!("Warning: Failed to save error log: {}", e);
+                                // Identify which record likely caused the problem (using row IDs from batch)
+                                let problematic_ids = batch.iter()
+                                    .enumerate()
+                                    .map(|(i, data)| format!("Record {}: Session {}", i, data.session_id.unwrap_or(0)))
+                                    .collect::<Vec<String>>()
+                                    .join(", ");
+                                
+                                // Create error log entry
+                                let error_entry = format!(
+                                    "\n[{}] ERROR: 400 Bad Request\n  Error details: {}\n  Batch size: {}\n  Records: {}\n  Sample data: {}\n  JSON preview: {}\n",
+                                    timestamp,
+                                    response.lines().last().unwrap_or("Unknown error"),
+                                    batch.len(),
+                                    problematic_ids,
+                                    serde_json::to_string(&batch[0]).unwrap_or_default(),
+                                    if json.len() > 200 { &json[0..200] } else { &json }
+                                );
+                                
+                                // Append to the error log file
+                                let mut file = match std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(error_log_path) {
+                                        Ok(file) => file,
+                                        Err(e) => {
+                                            println!("Warning: Failed to open error log file: {}", e);
+                                            return Err(Box::new(IoError::new(
+                                                ErrorKind::InvalidData,
+                                                format!("Bad request: {}", response.lines().last().unwrap_or("Unknown error"))
+                                            )));
+                                        }
+                                    };
+                                
+                                if let Err(e) = file.write_all(error_entry.as_bytes()) {
+                                    println!("Warning: Failed to write to error log: {}", e);
                                 } else {
-                                    println!("Saved problematic JSON data to {}", log_filename);
-                                }
-                                
-                                // Check if it's treating the batch as processed despite the error
-                                if response.contains("Invalid request body") {
-                                    println!("ERROR: The server rejected our data format.");
-                                    return Err(Box::new(IoError::new(
-                                        ErrorKind::InvalidData,
-                                        format!("Bad request: {}", response.lines().last().unwrap_or("Unknown error"))
-                                    )));
+                                    println!("Error details appended to {}", error_log_path);
                                 }
                                 
                                 return Err(Box::new(IoError::new(
