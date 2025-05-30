@@ -9,6 +9,9 @@ use serde::Serialize;
 use serde_json;
 use std::net::Shutdown;
 
+mod db_pool;
+use db_pool::{ConnectionPool};
+
 #[derive(Serialize, Clone)]
 struct SensorData {
     session_id: Option<i32>,
@@ -42,13 +45,13 @@ struct DataPoint {
     data_blob: String,
 }
 
+
 fn main() -> Result<(), Box<dyn Error>> {
     // Load configuration
     let mut config = Ini::new();
     config.load("config.ini")?;
     let config_send_mode = config.get("transmission", "send_mode").unwrap_or("batch".to_string());
 
-    
     let args: Vec<String> = std::env::args().collect();
 
     // Determine sending mode with command line override capability
@@ -58,7 +61,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         &config_send_mode
     };
 
-    println!("Data transmission mode: {}", send_mode);
+    // Persistent error handling
+    let max_row_errors_per_batch = 3; 
+    let mut row_error_count = 0;
+    let mut should_restart_query = false; 
 
     // Server configuration
     let server_ip = config.get("server", "ip").unwrap_or("127.0.0.1".to_string());
@@ -73,33 +79,66 @@ fn main() -> Result<(), Box<dyn Error>> {
     
     // Database configuration
     let db_path = config.get("database", "path")
-    .unwrap_or("./data_acquisition.db".to_string());
+        .unwrap_or("./data_acquisition.db".to_string());
+
+    let pool_size = config.getuint("database", "pool_size")?.unwrap_or(3) as usize;
+    let timeout = config.getuint("database", "timeout")?.unwrap_or(30) as u64 * 1000; // Convert to ms
+    let busy_timeout = config.getuint("database", "busy_timeout")?.unwrap_or(5000) as u64;
     
     // Server address for TCP connection
     let server_address = format!("{}:{}", server_ip, server_port);
     
     println!("Connecting to server at: {}", server_address);
-    println!("Attempting to open database at: {}", &db_path);
     
     // Connect to existing database
-    println!("Opening existing database at: {}", &db_path);
-    let conn = match Connection::open(&db_path) {
-        Ok(conn) => {
-            println!("Database opened successfully");
-            conn
+    let conn_pool = match ConnectionPool::new(&db_path, pool_size, timeout, busy_timeout) {
+        Ok(pool) => {
+            pool
         },
         Err(e) => {
-            println!("Failed to open database: {}", e);
+            println!("Failed to create database pool: {}", e);
             return Err(Box::new(e));
         }
     };
     
+    let conn = conn_pool.get()?;
+    let mut last_id = get_last_processed_id(&conn)?;
+
+        // Check if last_id is valid for current database
+    let max_id_in_db: i64 = conn.query_row(
+        "SELECT IFNULL(MAX(rowid), 0) FROM sensor_data",
+        params![],
+        |row| row.get(0)
+    )?;
+    
+    if last_id > max_id_in_db {
+        println!("WARNING: Last processed ID ({}) is greater than max ID in database ({})", 
+                 last_id, max_id_in_db);
+        println!("Resetting last processed ID to {}", max_id_in_db);
+        
+        last_id = max_id_in_db;
+        
+        // Save the corrected ID
+        if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
+            println!("Warning: Failed to save corrected last processed ID: {}", e);
+        }
+    }
+
     // Track the last processed row ID
     let mut last_id = get_last_processed_id(&conn)?;
 
     // Main transmission loop
     while continuous {
-        // Check if new data added
+
+        let conn = match conn_pool.get() {
+            Ok(conn) => conn,
+            Err(e) => {
+                println!("Error getting connection from pool: {}", e);
+                thread::sleep(Duration::from_secs_f64(transmit_interval));
+                continue;
+            }
+        };
+
         let current_max_id: i64 = conn.query_row(
             "SELECT IFNULL(MAX(rowid), 0) FROM sensor_data",
             params![],
@@ -109,8 +148,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("Current max ID in database: {} rows. Last processed ID: {}", current_max_id, last_id);
 
         if current_max_id > last_id {
-            println!("Database has {} new rows since last check", current_max_id - last_id);
-
             let latest_timestamp: String = conn.query_row(
                 "SELECT timestamp FROM sensor_data ORDER BY rowid DESC LIMIT 1",
                 params![],
@@ -126,7 +163,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             params![],
             |row| row.get(0)
         )?;
-        println!("Found {} rows to process", row_count);
         
         // Only connect if data to process
         if row_count > 0 {
@@ -177,7 +213,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             if send_mode == "individual" {
                 println!("Using individual processing mode");
                 let mut _last_processed_id = last_id;
-                // Process each item individually
+
                 for row_result in rows {
                     match row_result {
                         Ok((row_id, sensor_data)) => {
@@ -185,7 +221,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 Ok(_) => {
                                     // Success! Update the last_id and save it
                                     rows_count += 1;
-                                    last_id = row_id; // Update when successful
+                                    last_id = row_id;
                                     if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
                                         println!("Warning: Failed to save last processed ID: {}", e);
                                     }
@@ -194,7 +230,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 Err(e) => {
                                     // Connection failed, don't update last_id
                                     println!("ERROR: Single item processing failed: {}", e);
-                                    break; // Break to avoid further errors
+                                    break;
                                 }
                             }
                         },
@@ -216,11 +252,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             // When batch is full, send it
                             if current_batch.len() >= batch_size as usize {
                                 // Try to process the batch, only update last_id if successful
-                                match process_batch(&server_address, &current_batch, max_retries, retry_delay) {
+                                match process_batch(&server_address, &current_batch, max_retries, retry_delay, last_id) {
                                     Ok(_) => {
                                         // Success! Update the last_id and save it
                                         rows_count += current_batch.len();
-                                        last_id = row_id; // Only update when successful
+                                        last_id = row_id;
                                         if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
                                             println!("Warning: Failed to save last processed ID: {}", e);
                                         }
@@ -229,26 +265,90 @@ fn main() -> Result<(), Box<dyn Error>> {
                                         current_batch.clear();
                                     },
                                     Err(e) => {
-                                        // Connection failed, don't update last_id
-                                        println!("ERROR: Batch processing failed, will retry data: {}", e);
-                                        
-                                        // Implement backoff delay before retry
-                                        println!("Waiting before retry...");
-                                        thread::sleep(Duration::from_secs(retry_delay));
-                                        
-                                        // Break out of the loop to retry from the beginning
-                                        break;
+                                        // Check if this is a signal to skip the batch
+                                        let error_msg = e.to_string();
+                                        if error_msg.contains("SKIP_BATCH") {
+                                            // Extract the next batch boundary ID if available
+                                            let next_id = if let Some(id_str) = error_msg.split(':').nth(1) {
+                                                id_str.parse::<i64>().unwrap_or(last_id + 1)
+                                            } else {
+                                                // If no specific ID provided, just skip current batch
+                                                last_processed_id
+                                            };
+                                            
+                                            println!("Skipping problematic batch and continuing with next batch boundary at ID: {}", next_id);
+                                            
+                                            // Update last_id to skip to the next batch boundary
+                                            last_id = next_id;
+                                            
+                                            // Save updated ID to avoid reprocessing skipped records
+                                            if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
+                                                println!("Warning: Failed to save last processed ID: {}", e);
+                                            }
+                                            
+                                            // Clear the batch and break out of loop
+                                            current_batch.clear();
+                                            rows_count = 0;
+                                            
+                                            // Break out of the for loop entirely to restart with new last_id
+                                            break;
+                                        } else {
+                                            // Connection failed, don't update last_id
+                                            println!("ERROR: Batch processing failed, will retry data: {}", e);
+                                            
+                                            // Implement backoff delay before retry
+                                            println!("Waiting before retry...");
+                                            thread::sleep(Duration::from_secs(retry_delay));
+                                            
+                                            // Break out of the loop to retry from the beginning
+                                            break;
+                                        }
                                     }
                                 }
                             }
                         },
-                        Err(e) => println!("Error processing row: {}", e),
+                        Err(e) => {
+                            println!("Error processing row: {}", e);
+                            
+                            // Add counter for errors in the same batch
+                            row_error_count += 1;
+                            
+                            // If too many errors in a row, force skip to next batch
+                            if row_error_count >= max_row_errors_per_batch {
+                                println!("Too many row errors ({}). Skipping to next batch.", row_error_count);
+                                
+                                // Calculate next batch boundary
+                                let current_batch_start = (last_id / batch_size as i64) * batch_size as i64;
+                                let next_batch_boundary = current_batch_start + batch_size as i64;
+                                
+                                println!("Skipping from ID {} to {}", last_id, next_batch_boundary);
+                                
+                                // Update last_id to skip ahead
+                                last_id = next_batch_boundary;
+                                
+                                // Save the updated ID
+                                if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
+                                    println!("Warning: Failed to save last processed ID: {}", e);
+                                }
+                                
+                                // Reset error counter and set restart flag
+                                row_error_count = 0;
+                                current_batch.clear();
+                                should_restart_query = true;
+                                break;
+                            }
+                        }
                     }
                 }
                 
+                if should_restart_query {
+                    should_restart_query = false;
+                    continue; // This will restart the entire while loop with the new last_id
+                }
+
                 // Process any remaining rows in a final batch
                 if !current_batch.is_empty() {
-                    match process_batch(&server_address, &current_batch, max_retries, retry_delay) {
+                    match process_batch(&server_address, &current_batch, max_retries, retry_delay, last_id) {
                         Ok(_) => {
                             // Success! Update the last_id
                             rows_count += current_batch.len();
@@ -262,9 +362,39 @@ fn main() -> Result<(), Box<dyn Error>> {
                             }
                         },
                         Err(e) => {
-                            // Connection failed, don't update last_id
-                            println!("ERROR: Final batch processing failed, will retry data: {}", e);
-                        }
+                            // Check if this is a signal to skip the batch
+                            let error_msg = e.to_string();
+                            
+                            if error_msg.contains("SKIP_BATCH") {
+                                // Extract the next batch boundary ID if available
+                                let next_id = if let Some(id_str) = error_msg.split(':').nth(1) {
+                                    id_str.parse::<i64>().unwrap_or(last_id + 1)
+                                } else {
+                                    // If no specific ID provided, just skip current batch
+                                    last_processed_id
+                                };
+                                
+                                println!("FINAL BATCH: Skipping problematic batch and moving to next batch boundary at ID: {}", next_id);
+                                
+                                // Update last_id to skip to the next batch boundary
+                                last_id = next_id;
+                                
+                                // Save updated ID to avoid reprocessing skipped records
+                                if let Err(e) = std::fs::write("last_processed_id.txt", last_id.to_string()) {
+                                    println!("Warning: Failed to save last processed ID: {}", e);
+                                }
+                                
+                                // Clear the batch and exit this processing entirely
+                                current_batch.clear();
+                                rows_count = 0;
+                                
+                                println!("FINAL BATCH: Successfully updated last_id to: {}", last_id);
+                                
+                            } else {
+                                // Connection failed, don't update last_id
+                                println!("ERROR: Final batch processing failed, will retry data: {}", e);
+                            }
+                        }      
                     }
                 }
             }
@@ -307,13 +437,13 @@ fn connect_with_retry(address: &str, max_retries: u32, retry_delay: u64) -> Resu
 }
 
 
-fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
+fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32, retry_delay: u64, last_id: i64) -> Result<(), Box<dyn Error>> {
     // Build datapoints to match expected format
     let mut datapoints_json_array = Vec::with_capacity(batch.len());
     
     for sensor_data in batch {
         // Get the session ID as a string
-        let id_str = match sensor_data.session_id {
+        let _id_str = match sensor_data.session_id {
             Some(id) => id.to_string(),
             None => "1".to_string()
         };
@@ -339,7 +469,7 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                 "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
             }
         });
-        
+
         datapoints_json_array.push(datapoint);
     }
     
@@ -350,8 +480,6 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
     
     // Serialize to final JSON string
     let final_json = serde_json::to_string(&batch_payload)?;
-    println!("Final JSON beginning: {}", &final_json[0..std::cmp::min(final_json.len(),100)]);
-    
 
     // When sending the JSON:
     let mut attempts = 0;
@@ -365,13 +493,8 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                 // Connection succeeded, now try to send data
                 println!("Connected to server at {} for batch processing (attempt {}/{})", 
                          server_address, attempts + 1, max_retries);
-                
-                // Convert to JSON
-                // let json = serde_json::to_string(&batched_data)?;
+
                 let endpoint = "/sessions-sensors-data/batch";
-                
-                // Try to send data
-                println!("Sending batch of {} records ({} bytes)", batch.len(), json.len());
                 
                 // Catch and handle any errors during send
                 let send_result = (|| -> Result<(), Box<dyn Error>> {
@@ -397,12 +520,77 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                 println!("ERROR: Server rejected the request format: {}", 
                                         response.lines().last().unwrap_or("Unknown error"));
                                 
-                                // Check if it's treating the batch as processed despite the error
-                                if response.contains("Invalid request body") {
-                                    println!("ERROR: The server rejected our data format.");
+                                // Create error log entry
+                                let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                                let error_log_path = "transmission_errors.txt";
+                                
+                                // Log the problematic batch details
+                                let problematic_ids = batch.iter()
+                                    .enumerate()
+                                    .map(|(i, data)| format!("Record {}: Session {}", i, data.session_id.unwrap_or(0)))
+                                    .collect::<Vec<String>>()
+                                    .join(", ");
+                                
+                                // Error entry with batch information
+                                let error_entry = format!(
+                                    "\n[{}] ERROR: 400 Bad Request\n  Error details: {}\n  Batch size: {}\n  Records: {}\n  Sample data: {}\n  JSON preview: {}\n",
+                                    timestamp,
+                                    response.lines().last().unwrap_or("Unknown error"),
+                                    batch.len(),
+                                    problematic_ids,
+                                    serde_json::to_string(&batch[0]).unwrap_or_default(),
+                                    if json.len() > 200 { &json[0..200] } else { &json }
+                                );
+                                
+                                // Write to error log
+                                let mut file = match std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open(error_log_path) {
+                                        Ok(file) => file,
+                                        Err(e) => {
+                                            println!("Warning: Failed to open error log file: {}", e);
+                                            return Err(Box::new(IoError::new(
+                                                ErrorKind::InvalidData,
+                                                format!("Bad request: {}", response.lines().last().unwrap_or("Unknown error"))
+                                            )));
+                                        }
+                                    };
+                                
+                                if let Err(e) = file.write_all(error_entry.as_bytes()) {
+                                    println!("Warning: Failed to write to error log: {}", e);
+                                } else {
+                                    println!("Error details appended to {}", error_log_path);
+                                }
+                                
+                                // Increment attempts and check if should skip this batch
+                                attempts += 1;
+                                if attempts >= 3 {  // Skip after 3 attempts
+                                    println!("SKIPPING: Failed to process batch after 3 attempts. Moving to next batch boundary.");
+                                    
+                                        // Find the starting ID of this batch
+                                        let batch_start_id = batch.iter().enumerate()
+                                            .filter_map(|(i, _)| {
+                                                if i == 0 {
+                                                    Some(last_id + 1)
+                                                } else {
+                                                    None
+                                                }
+                                            })
+                                            .next()
+                                            .unwrap_or(last_id + 1);
+                                    
+                                    // Calculate the next batch boundary
+                                    let batch_size = batch.len() as i64;
+                                    let next_batch_boundary = ((batch_start_id + batch_size - 1) / batch_size + 1) * batch_size;
+                                    
+                                    println!("Current batch starts at ID: {}, Moving to next batch boundary: {}", 
+                                            batch_start_id, next_batch_boundary);
+                                    
+                                    // Return error type that indicates skip to the next batch boundary
                                     return Err(Box::new(IoError::new(
                                         ErrorKind::InvalidData,
-                                        format!("Bad request: {}", response.lines().last().unwrap_or("Unknown error"))
+                                        format!("SKIP_BATCH:{}", next_batch_boundary)
                                     )));
                                 }
                                 
@@ -410,7 +598,7 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                                     ErrorKind::InvalidData,
                                     format!("Server returned 400 Bad Request. Check data format")
                                 )));
-}
+                            }
                             
                             // Check if the response contains a 404 Not Found error
                             if response.contains("404 Not Found") {
@@ -447,7 +635,6 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
                 
                 // If send was successful, return success
                 if send_result.is_ok() {
-                    println!("Batch successfully processed");
                     return Ok(());
                 }
                 
@@ -471,6 +658,14 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
             }
         }
     }
+        if attempts >= max_retries {
+        // Return a generic skip to next batch
+        let next_batch_boundary = ((last_id / 100) + 1) * 100; // Assuming batch_size is 100
+        return Err(Box::new(IoError::new(
+            ErrorKind::InvalidData,
+            format!("SKIP_BATCH:{}", next_batch_boundary)
+        )));
+    }
     
     Err(Box::new(IoError::new(
         ErrorKind::ConnectionAborted,
@@ -479,11 +674,10 @@ fn process_batch(server_address: &str, batch: &Vec<SensorData>, max_retries: u32
 }
 
 
-/// Process a single sensor data item
 fn process_single_item(server_address: &str, sensor_data: &SensorData, max_retries: u32, retry_delay: u64) -> Result<(), Box<dyn Error>> {
     let mut attempts = 0;
     
-    // Create the JSON for a single item - using SAME format as batch
+    // Create the JSON for a single item
     let datapoint = serde_json::json!({
         "id": 1i64,
         "datetime": sensor_data.timestamp,
@@ -504,9 +698,6 @@ fn process_single_item(server_address: &str, sensor_data: &SensorData, max_retri
             "string": sensor_data.session_id.map_or(1i64, |id| id as i64)  
         }
     });
-    
-    // Debug the structure
-    println!("Individual data JSON structure: {}", serde_json::to_string_pretty(&datapoint)?);
     
     // Single endpoint
     let single_endpoint = "/sessions-sensors-data";
@@ -537,8 +728,7 @@ fn process_single_item(server_address: &str, sensor_data: &SensorData, max_retri
                     Ok(n) if n > 0 => {
                         let response = String::from_utf8_lossy(&buffer[0..n]);
                         println!("Response: {} bytes - {}", n, response);
-                        
-                        // Add error handling similar to batch process
+
                         if response.contains("400 Bad Request") || response.contains("404 Not Found") {
                             println!("ERROR: Server rejected single item: {}", 
                                     response.lines().last().unwrap_or("Unknown error"));
@@ -596,7 +786,7 @@ fn get_last_processed_id(conn: &Connection) -> Result<i64, Box<dyn Error>> {
         }
     }
     
-    // If no stored ID, get the SECOND row's ID (or 0 if less than 2 rows exist)
+    // If no stored ID
     let second_row_id: i64 = conn.query_row(
         "SELECT IFNULL((SELECT rowid FROM sensor_data ORDER BY rowid LIMIT 1 OFFSET 1), 0)",
         params![],
