@@ -50,6 +50,9 @@ send_mode = batch         ; Transmission options batch or individual
 
 [database]
 path = /home/pi/Pi_TCP/src/data_acquisition.db  ; Path to the source SQLite database file
+pool_size = 3             ; Data pool size to ensure resilience for database locks
+timeout = 30              ; Database lock logic
+busy_timeout = 5000       ; Database lock logic
 
 [http]
 data_endpoint = /data

@@ -25,8 +25,6 @@ impl ConnectionPool {
             connections.push_back(conn);
         }
 
-        println!("Created connection pool with {} initial connections", initial_size);
-
         Ok(ConnectionPool {
             connections: Arc::new(Mutex::new(connections)),
             db_path: db_path_str,
