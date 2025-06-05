@@ -51,6 +51,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut config = Ini::new();
     config.load("config.ini")?;
     let config_send_mode = config.get("transmission", "send_mode").unwrap_or("batch".to_string());
+    let skip_interval = config.getuint("transmission", "skip_interval")?.unwrap_or(1) as i64;
 
     let args: Vec<String> = std::env::args().collect();
 
@@ -159,7 +160,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         // Get row count to process
         let row_count: i64 = conn.query_row(
-            &format!("SELECT COUNT(*) FROM sensor_data WHERE rowid > {}", last_id),
+            &format!("SELECT COUNT(*) FROM sensor_data WHERE rowid > {} AND rowid % {} = 0", last_id, skip_interval),
             params![],
             |row| row.get(0)
         )?;
@@ -174,12 +175,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                     rowid, sessionID, timestamp, latitude, longitude, altitude, 
                     accel_x, accel_y, accel_z, 
                     gyro_x, gyro_y, gyro_z, 
-                    dac_1, dac_2, dac_3, dac_4
+                    dac_1, dac_2, dac_3, dac_4 
                  FROM sensor_data 
-                 WHERE rowid > {}
+                 WHERE rowid > {} AND rowid % {} = 0
                  ORDER BY rowid
                  LIMIT {}",
-                last_id, batch_size
+                last_id, skip_interval, batch_size
             );
             
             let mut stmt = conn.prepare(&query)?;
